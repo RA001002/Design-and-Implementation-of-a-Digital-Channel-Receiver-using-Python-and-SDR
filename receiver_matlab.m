@@ -5,7 +5,7 @@ close all;
 %% ===============================
 % Pluto SDR Configuration
 %% ===============================
-centerFreq = 1.84e9;       % Center Frequency (scan band)
+centerFreq = 0.7e9;       % Center Frequency
 sampleRate = 10e6;         % Sampling Rate
 frameLength = 2^14;
 gain = 40;
@@ -15,7 +15,8 @@ rx = sdrrx('Pluto', ...
     'BasebandSampleRate', sampleRate, ...
     'SamplesPerFrame', frameLength, ...
     'GainSource', 'Manual', ...
-    'Gain', gain);
+    'Gain', gain, ...
+    'OutputDataType', 'double');   
 
 %% ===============================
 % Parameters for Channel Detection
@@ -23,20 +24,19 @@ rx = sdrrx('Pluto', ...
 N = frameLength;
 freqAxis = linspace(-sampleRate/2, sampleRate/2, N);
 
-channelBW = 1e6;     % Assume 1 MHz channel width
-threshold = -80;     % Detection threshold (dB)
+channelBW = 1e6;     % 1 MHz channel
+threshold = -80;     % dB threshold
 
 %% ===============================
 % Visualization Setup
 %% ===============================
 figure;
-
 disp('Smart Spectrum Receiver Running...');
 
 while true
     
     %% Step 1: Receive Signal
-    rxSignal = rx();
+    rxSignal = rx();   % already double
     
     %% Step 2: FFT Spectrum
     fftSignal = fftshift(fft(rxSignal));
@@ -47,32 +47,31 @@ while true
     
     if ~isempty(pks)
         
-        % Step 4: Strongest Channel Selection
+        % Strongest peak
         [~, idx] = max(pks);
         peakLoc = locs(idx);
         peakFreq = freqAxis(peakLoc);
         
         fprintf('Strongest Channel at: %.2f MHz\n', peakFreq/1e6);
         
-        %% Step 5: Channel Extraction (Bandpass Filter)
-        f_low = peakFreq - channelBW/2;
-        f_high = peakFreq + channelBW/2;
+        %% Step 4: Frequency Shift to Baseband
+        t = (0:N-1)'/sampleRate;
+        shiftedSignal = rxSignal .* exp(-1j*2*pi*peakFreq*t);
         
-        % Design filter
-        bpFilt = designfilt('bandpassfir', ...
+        %% Step 5: Lowpass Filter (Channel Extraction)
+        lpFilt = designfilt('lowpassfir', ...
             'FilterOrder', 100, ...
-            'CutoffFrequency1', f_low, ...
-            'CutoffFrequency2', f_high, ...
+            'CutoffFrequency', channelBW/2, ...
             'SampleRate', sampleRate);
         
-        extractedSignal = filter(bpFilt, rxSignal);
+        extractedSignal = filter(lpFilt, shiftedSignal);
         
     else
         peakFreq = 0;
         extractedSignal = rxSignal;
     end
     
-    %% Step 6: Plot Spectrum
+    %% Step 6: Plot Full Spectrum
     subplot(2,1,1);
     plot(freqAxis/1e6, powerSpec);
     title('Full Spectrum');
@@ -88,11 +87,11 @@ while true
     
     %% Step 7: Extracted Channel Spectrum
     fftExtracted = fftshift(fft(extractedSignal));
-    powerExtracted = 20*log10(abs(fftExtracted)+1e-6);
+    powerExtracted = 20*log10(abs(fftExtracted) + 1e-6);
     
     subplot(2,1,2);
     plot(freqAxis/1e6, powerExtracted);
-    title('Extracted Strongest Channel');
+    title('Extracted Strongest Channel (Basebanded)');
     xlabel('Frequency (MHz)');
     ylabel('Power (dB)');
     grid on;
